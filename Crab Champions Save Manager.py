@@ -5,35 +5,41 @@ from pathlib import Path
 from tkinter import ttk
 from types import SimpleNamespace
 
-class savePanel:
+class SavePanel:
     def __init__(self, parent, colors):
         self.frame = tk.Frame(parent, padx=5, pady=5, bg=colors["accent"], borderwidth=2, relief=tk.GROOVE)
         self.tree = ttk.Treeview(self.frame, columns=("SaveName",), show="headings", selectmode=tk.BROWSE)
 
-class infoPanel:
+class InfoPanel:
     def __init__(self, parent, colors, font):
         self.frame = tk.Frame(parent, width=160, height=200, padx=2, pady=2, bg=colors["accent"], borderwidth=2, relief=tk.GROOVE)
         self.label = tk.Label(self.frame, text="Select a save file to read its info", bg=colors["main"], font=font, width=15, wraplength=240)
-        self.confirm_button = tk.Button(self.frame, text="Create New Save", font=font, width=13, padx=5, bg=colors["buttons"], fg=colors["text"])
-        self.cancel_button = tk.Button(self.frame, text="Delete Selected Save", font=font, width=16, padx=5, bg=colors["buttons"], fg=colors["text"])
+        self.confirm_button = tk.Button(self.frame, text="Create New Save", font=font, width=13, padx=5, bg=colors["buttons"], activebackground=colors["pressed"], fg=colors["text"])
+        self.cancel_button = tk.Button(self.frame, text="Delete Selected Save", font=font, width=16, padx=5, bg=colors["buttons"], activebackground=colors["pressed"], fg=colors["text"])
         self.name_entry = tk.Entry(self.frame)
 
 class CCSMApp:
     def __init__(self):
         self.invalid_chars = '<>:"/\\|?*'
-        self.dark_mode = "light"
+        self.dark_mode = "dark"
+        self.info_error = False
+        self.copy_in_progress = False
         self.colors = SimpleNamespace(
             light = {
                 "main": "#edf7ff",
                 "accent": "#b7d2e8",
                 "buttons": "#c7e6ff",
-                "text": "black"
+                "pressed": "#b3cfe6",
+                "text": "black",
+                "error": "red"
             },
             dark = {
                 "main": "#2d363d",
                 "accent": "#4a555e",
                 "buttons": "#384c5c",
-                "text": "white"
+                "pressed": "#283642",
+                "text": "white",
+                "error": "brown1"
             }
         )
         self.offsets = {
@@ -52,10 +58,11 @@ class CCSMApp:
         
         self.root = tk.Tk()
         self.container = tk.Frame(self.root, padx=5, pady=5, bg=self.colors.light["main"])
-        self.play_button = tk.Button(self.container, text="Play Selected Save", font=self.font, height=2, padx=3, bg=self.colors.light["buttons"], fg=self.colors.light["text"], command=self.play)
-        self.dark_button = tk.Button(self.container, text="Enable Dark Mode", font=self.font, height=1, padx=3, bg=self.colors.dark["buttons"], fg=self.colors.dark["text"], command=self.dark_toggle)
-        self.save_panel = savePanel(self.container, self.colors.light)
-        self.info_panel = infoPanel(self.container, self.colors.light, self.font)
+        self.play_button = tk.Button(self.container, text="Play Selected Save", font=self.font, height=2, padx=3, bg=self.colors.light["buttons"], activebackground=self.colors.light["pressed"], fg=self.colors.light["text"], command=self.play)
+        self.dark_button = tk.Button(self.container, text="Enable Dark Mode", font=self.font, height=1, padx=3, bg=self.colors.dark["buttons"], activebackground=self.colors.light["pressed"], fg=self.colors.dark["text"], command=self.dark_toggle)
+        self.save_panel = SavePanel(self.container, self.colors.light)
+        self.save_panel.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.info_panel = InfoPanel(self.container, self.colors.light, self.font)
         self.style = ttk.Style()
         self.style.theme_use("clam")
         self.style.layout("Treeview", [
@@ -68,23 +75,25 @@ class CCSMApp:
         ])
         
     def unlocked_counts(self, filename):
-        data = load_bytes(filename)
-        results = {}
-        for prop, rel_offset in self.offsets.items():
-            idx = data.find(prop.encode("utf-8"))
-            if idx == -1:
-                return None
-            block = data[idx:idx + 80]
-            if rel_offset + 4 > len(block):
-                return None
-            results[prop] = struct.unpack("<i", block[rel_offset:rel_offset + 4])[0]
-        return results
+        if (data := load_bytes(filename)):
+            results = {}
+            for prop, rel_offset in self.offsets.items():
+                idx = data.find(prop.encode("utf-8"))
+                if idx == -1:
+                    return None
+                block = data[idx:idx + 80]
+                if rel_offset + 4 > len(block):
+                    return None
+                results[prop] = struct.unpack("<i", block[rel_offset:rel_offset + 4])[0]
+            return results
+        else:
+            return None
 
     def challenge_count(self, filename):
         data = load_bytes(filename)
         start = data.find(b"Challenges")
         if start == -1:
-            return 0
+            return None
         block = data[start:start+100000]
 
         total_true = 0
@@ -108,6 +117,15 @@ class CCSMApp:
             if name not in ["Config", "Logs", "New Save Template"]:
                 save_tree.insert("", tk.END, values=(name,))
 
+    def update_info_text(self, new_text: str):
+        color = getattr(self.colors, self.dark_mode)
+        if new_text[0:5] == "Error":
+            self.info_panel.label.config(fg=color["error"], text=new_text)
+            self.info_error = True
+        else:
+            self.info_panel.label.config(fg=color["text"], text=new_text)
+            self.info_error = False
+
     def confirm(self, save_path=None):
         save_tree = self.save_panel.tree
         info_label = self.info_panel.label
@@ -118,9 +136,9 @@ class CCSMApp:
         if save_path:
             if save_path.exists():
                 shutil.rmtree(save_path)
-                info_label.config(text="Select a save file to read its info")
+                self.update_info_text("Select a save file to read its info")
             else:
-                info_label.config(text="Error: Save file not found")
+                self.update_info_text("Error: Save file not found")
                 
             self.refresh_list()
             self.reset_buttons()
@@ -128,13 +146,13 @@ class CCSMApp:
             new_name = name_entry.get().strip()
 
             if not new_name:
-                info_label.config(text="Error: Name cannot be blank")
+                self.update_info_text("Error: Name cannot be blank")
                 return
             if any(ch in self.invalid_chars for ch in new_name):
-                info_label.config(text=f"Error: Entered name contains invalid characters ({invalid_chars})")
+                self.update_info_text(f"Error: Entered name contains invalid characters ({self.invalid_chars})")
                 return
             if (self.Saved / new_name).exists() or read_desc(self.SaveGames) == new_name:
-                info_label.config(text="Error: A save file with that name already exists")
+                self.update_info_text("Error: A save file with that name already exists")
                 return
             
             self.refresh_list()
@@ -143,18 +161,18 @@ class CCSMApp:
             if save_tree.get_children() == 0:
                 self.new_save(new_name)
             else:
-                save_tree.unbind("<<TreeviewSelect>>")
-                info_label.config(text=f"Make a new save from scratch:\n\n- or -\n\nSelect a save to copy:")
+                self.copy_in_progress = True
+                self.update_info_text(f"Make a new save from scratch:\n\n- or -\n\nSelect a save to copy:")
                 confirm_button.config(text="New Empty Save", command=lambda: self.new_save(new_name))
-                cancel_button.config(text="Copy Current Save", command=lambda: self.copy_save(new_name))
+                cancel_button.config(text="Copy Selected Save", command=lambda: self.copy_save(new_name))
 
     def cancel(self):
         self.refresh_list()
         self.info_panel.name_entry.grid_remove()
         if self.save_panel.tree.selection():
-            on_select()
+            self.on_select()
         else:
-            self.info_panel.label.config(text="Select a save file to read its info")
+            self.update_info_text("Select a save file to read its info")
             self.reset_buttons()        
         
     def reset_buttons(self):
@@ -166,7 +184,7 @@ class CCSMApp:
         
         info_panel.name_entry.delete(0, tk.END)
         info_panel.name_entry.grid(row=1, column=0, sticky="nsew", padx=5, pady=5, columnspan=2)
-        info_panel.label.config(text="Enter a name for the new save:")
+        self.update_info_text("Enter a name for the new save")
         info_panel.confirm_button.config(text="Confirm", command=self.confirm)
         info_panel.cancel_button.config(text="Cancel", command=self.cancel)
             
@@ -179,13 +197,13 @@ class CCSMApp:
             save_path = self.Saved / save_name
 
             if save_name == "[Last Used Save]":
-                info_panel.label.config(text="Error: Cannot erase the last used save file")
+                self.update_info_text("Error: Cannot erase the last used save file")
             else:
-                info_panel.label.config(text=f"Delete '{save_name}'?\nThis cannot be undone.")
+                self.update_info_text(f"Delete '{save_name}'?\nThis cannot be undone.")
                 info_panel.confirm_button.config(text="Confirm", command=lambda: self.confirm(save_path))
                 info_panel.cancel_button.config(text="Cancel", command=self.cancel)
         else:
-            info_panel.label.config(text="Error: No save file selected")
+            self.update_info_text("Error: No save file selected")
 
     def save_update(self, new_name):
         write_desc(self.Saved / new_name, new_name)
@@ -199,19 +217,21 @@ class CCSMApp:
                 self.save_panel.tree.see(item_id)
                 break
         
-        self.save_panel.tree.bind("<<TreeviewSelect>>", lambda e: self.on_select(e))
         self.reset_buttons()
         self.on_select()
     
     def new_save(self, new_name):
+        self.copy_in_progress = False
         (self.Saved / new_name).mkdir()
         (self.Saved / new_name / "SaveSlot.sav").touch(exist_ok=False)
         self.save_update(new_name)
 
     def copy_save(self, new_name):
+        self.copy_in_progress = False
         selected = self.save_panel.tree.selection()
+        
         if not selected:
-            self.info_panel.label.config(text="Error: No save file selected")
+            self.update_info_text("Error: No save file selected")
             return
         else:
             selected_name = self.save_panel.tree.item(selected[0], "values")[0]
@@ -224,26 +244,32 @@ class CCSMApp:
         self.save_update(new_name)
 
     def on_select(self, *e):
-        selected = self.save_panel.tree.selection()
-        if selected:
-            self.info_panel.name_entry.grid_remove()
-            self.reset_buttons()
-            self.info_panel.label.config(text="Select a save file to read its info:")
-            selected_name = self.save_panel.tree.item(selected[0], "values")[0]
+        if not self.copy_in_progress:
+            color = getattr(self.colors, self.dark_mode)
+            selected = self.save_panel.tree.selection()
             
-            if selected_name == "[Last Used Save]":
-                save_name = "SaveGames"
-            else:
-                save_name = selected_name
-            save_path = self.Saved / save_name / "SaveSlot.sav"
+            if selected:
+                self.info_panel.name_entry.grid_remove()
+                self.reset_buttons()
+                selected_name = self.save_panel.tree.item(selected[0], "values")[0]
+                
+                if selected_name == "[Last Used Save]":
+                    save_name = "SaveGames"
+                else:
+                    save_name = selected_name
+                save_path = self.Saved / save_name / "SaveSlot.sav"
 
-            if not load_bytes(save_path):
-                self.info_panel.label.config(text="New Save File\n\nNo info to show")
-            else:
-                unlocks = list(self.unlocked_counts(save_path).values())
-                mod_time = datetime.fromtimestamp(save_path.stat().st_mtime).strftime("%A, %B %d, %Y  %H:%M")
-                total = self.challenge_count(save_path)
-                self.info_panel.label.config(text=f"""
+                if load_bytes(save_path) == b"":
+                    self.update_info_text("New Save File\n\nNo info to show")
+                else:
+                    if (unlocks := self.unlocked_counts(save_path)):
+                        unlocks = list(unlocks.values())
+                    else:
+                        self.update_info_text("Error: Could not read save file")
+                        return
+                    mod_time = datetime.fromtimestamp(save_path.stat().st_mtime).strftime("%A, %B %d, %Y  %H:%M")
+                    total = self.challenge_count(save_path)
+                    self.update_info_text(f"""
 Save name: {read_desc(self.Saved / save_name)}
 
 Last Updated:
@@ -261,23 +287,25 @@ Unlocked relics: {unlocks[7]} / 53
 """)
 
     def dark_toggle(self):
+        self.dark_mode = ("light" if self.dark_mode == "dark" else "dark")
         color = getattr(self.colors, self.dark_mode)
+        
         self.style.configure("Treeview", background=color["main"], fieldbackground=color["main"], foreground=color["text"])
         self.style.configure("Treeview.Heading", background=color["buttons"], foreground=color["text"], borderwidth = 0)
         self.style.map("Treeview.Heading", background=[("active", color["buttons"])])
         self.container.config(bg=color["main"])
-        self.info_panel.label.config(bg=color["main"], fg=color["text"])
+        self.info_panel.label.config(bg=color["main"], fg=(color["error"] if self.info_error else color["text"]))
         self.save_panel.frame.config(bg=color["accent"])
         self.info_panel.frame.config(bg=color["accent"])
-        for button in [self.info_panel.confirm_button, self.info_panel.cancel_button, self.play_button]:
-            button.config(bg=color["buttons"], fg=color["text"])
-        self.dark_mode = ("light" if self.dark_mode == "dark" else "dark")
-        self.dark_button.config(bg=color["buttons"], fg=color["text"], text=f"Enable {self.dark_mode.capitalize()} Mode")
+        for button in [self.info_panel.confirm_button, self.info_panel.cancel_button, self.play_button, self.dark_button]:
+            button.config(bg=color["buttons"], activebackground=color["pressed"], fg=color["text"], activeforeground=color["text"])
+        self.dark_button.config(text=f"Enable {'Light' if self.dark_mode == 'dark' else 'Dark'} Mode")
         
     def play(self):
         selected = self.save_panel.tree.selection()
+        
         if not selected:
-            self.info_panel.label.config(text="Error: No save selected")
+            self.update_info_text("Error: No save selected")
             return
         
         save_name = self.save_panel.tree.item(selected[0], "values")[0]
@@ -308,47 +336,60 @@ def read_desc(folder: Path) -> str | None:
     return None
 
 def load_bytes(filename):
-    with open(filename, "rb") as f:
+    try:
+        f = open(filename, "rb")
+    except:
+        return None
+    else:
         return f.read()
 
 def main():
     window = CCSMApp()
-    window.root.geometry("420x350")
+    
     window.root.title("Crab Champions Save Manager")
     window.root.iconbitmap(str(resource_path("crab_icon.ico")))
     window.root.resizable(False, False)
 
-    window.container.place(x=0, y=0, relwidth=1, relheight=1)
-    window.save_panel.tree.column("SaveName", width=0, anchor="w")
-    window.save_panel.tree.heading("SaveName", text="Saves:")
-    window.save_panel.frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=6)
-    window.save_panel.tree.pack(fill=tk.BOTH, expand=True)
-    window.info_panel.frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=6, rowspan=3)
-    window.info_panel.label.grid(row=0, column=0, sticky="nsew", padx=5, pady=5, columnspan=2)
-    window.info_panel.confirm_button.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
-    window.info_panel.cancel_button.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
-    window.dark_button.grid(row=1, column=0, sticky="nsew", padx=5)
-    window.play_button.grid(row=2, column=0, sticky="nsew", padx=5, pady=7)
+    if window.Saved.exists():
+        window.root.geometry("420x350")
+        window.container.place(x=0, y=0, relwidth=1, relheight=1)
+        window.save_panel.tree.column("SaveName", width=0, anchor="w")
+        window.save_panel.tree.heading("SaveName", text="Saves:")
+        window.save_panel.frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=6)
+        window.save_panel.tree.pack(fill=tk.BOTH, expand=True)
+        window.info_panel.frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=6, rowspan=3)
+        window.info_panel.label.grid(row=0, column=0, sticky="nsew", padx=5, pady=5, columnspan=2)
+        window.info_panel.confirm_button.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        window.info_panel.cancel_button.grid(row=2, column=1, sticky="nsew", padx=5, pady=5)
+        window.dark_button.grid(row=1, column=0, sticky="nsew", padx=5)
+        window.play_button.grid(row=2, column=0, sticky="nsew", padx=5, pady=7)
 
-    window.container.grid_columnconfigure(0, weight=1)
-    window.container.grid_columnconfigure(1, weight=0)
-    window.container.grid_rowconfigure(0, weight=1)
-    window.container.grid_rowconfigure(1, weight=0)
-    window.info_panel.frame.grid_rowconfigure(0, weight=1)
+        window.container.grid_columnconfigure(0, weight=1)
+        window.container.grid_columnconfigure(1, weight=0)
+        window.container.grid_rowconfigure(0, weight=1)
+        window.container.grid_rowconfigure(1, weight=0)
+        window.info_panel.frame.grid_rowconfigure(0, weight=1)
 
-    window.reset_buttons()
-    window.dark_toggle()
-    window.refresh_list()
-    window.save_panel.tree.bind("<<TreeviewSelect>>", lambda e: window.on_select(e))
-    
+        window.reset_buttons()
+        window.dark_toggle()
+        window.refresh_list()
+    else:
+        window.root.geometry("350x100")
+        window.dark_toggle()
+        window.container.pack(fill=tk.BOTH, expand=True)
+        window.update_info_text('Error: "Saved" folder not found')
+        window.info_panel.frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        window.info_panel.label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
     window.root.mainloop()
 
 if __name__ == "__main__":
-    for item in (Path(os.environ["LOCALAPPDATA"]) / "CrabChampions" / "Saved").iterdir():
-        if item.is_dir() and item.name not in ["Config", "Logs", "New Save Template"]:
-            if not read_desc(item):
-                if item.name == "SaveGames":
-                    write_desc(item, "Initial Save")
-                else:
-                    write_desc(item, item.name)
+    if (saved_path := Path(os.environ["LOCALAPPDATA"]) / "CrabChampions" / "Saved").exists():
+        for item in saved_path.iterdir():
+            if item.is_dir() and item.name not in ["Config", "Logs", "New Save Template"]:
+                if not read_desc(item):
+                    if item.name == "SaveGames":
+                        write_desc(item, "Initial Save")
+                    else:
+                        write_desc(item, item.name)
     main()
